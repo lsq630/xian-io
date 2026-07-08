@@ -146,16 +146,20 @@ function setupSocketEvents() {
 function updateUI() {
     const me = players[myId];
     if (!me) return;
-    const nameEl = document.getElementById('playerName');
-    const realmEl = document.getElementById('playerRealm');
-    const hpEl = document.getElementById('playerHp');
+    // ... 更新名称、境界、血量条等
     const expBar = document.getElementById('playerExp');
-    if (nameEl) nameEl.textContent = me.username || '无名';
-    if (realmEl) realmEl.textContent = `境界：${me.realm}`;
-    if (hpEl) hpEl.style.width = `${Math.max(0, (me.hp / me.maxHp) * 100)}%`;
+    const expText = document.getElementById('expText');
+    const expPercent = document.getElementById('expPercent');
     if (expBar) {
-        const expPercent = me.maxCultivation ? (me.cultivation / me.maxCultivation) * 100 : 0;
-        expBar.style.width = `${Math.min(100, expPercent)}%`;
+        const percent = me.maxCultivation ? (me.cultivation / me.maxCultivation) * 100 : 0;
+        expBar.style.width = `${Math.min(100, percent)}%`;
+    }
+    if (expText) {
+        expText.textContent = `${Math.floor(me.cultivation)} / ${me.maxCultivation}`;
+    }
+    if (expPercent) {
+        const percent = me.maxCultivation ? (me.cultivation / me.maxCultivation) * 100 : 0;
+        expPercent.textContent = `${Math.min(100, percent).toFixed(1)}%`;
     }
 }
 
@@ -166,14 +170,16 @@ function draw() {
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const me = players[myId];
-    if (!me) {
-        return;
-    }
     let offsetX = 0, offsetY = 0;
     if (me) {
         offsetX = canvas.width / 2 - me.x;
         offsetY = canvas.height / 2 - me.y;
+    } else {
+        // 如果没有自身玩家，偏移量置0，并绘制其他实体（如果有）
+        console.warn('⚠️ 自身玩家数据缺失，偏移量为0');
     }
+    // 调试：打印实体数量
+    console.log(`绘制：玩家 ${Object.keys(players).length} 个，妖兽 ${Object.keys(monsters).length} 个，掉落物 ${Object.keys(drops).length} 个`);
     // 灵纹点缀
     for (let i = 0; i < 30; i++) {
         ctx.beginPath();
@@ -187,6 +193,7 @@ function draw() {
         const d = drops[id];
         const drawX = d.x + offsetX;
         const drawY = d.y + offsetY;
+        if (drawX < -100 || drawX > canvas.width + 100 || drawY < -100 || drawY > canvas.height + 100) continue;
         ctx.font = '20px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -201,6 +208,7 @@ function draw() {
         const m = monsters[id];
         const drawX = m.x + offsetX;
         const drawY = m.y + offsetY;
+        if (drawX < -100 || drawX > canvas.width + 100 || drawY < -100 || drawY > canvas.height + 100) continue;
         // 身体
         ctx.beginPath();
         ctx.arc(drawX, drawY, m.radius, 0, Math.PI * 2);
@@ -242,7 +250,7 @@ function draw() {
         const isMe = (id === myId);
         const drawX = p.x + offsetX;
         const drawY = p.y + offsetY;
-
+        if (drawX < -100 || drawX > canvas.width + 100 || drawY < -100 || drawY > canvas.height + 100) continue;
         // 身体
         ctx.beginPath();
         ctx.arc(drawX, drawY, p.radius, 0, Math.PI * 2);
