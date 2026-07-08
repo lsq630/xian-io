@@ -1,3 +1,36 @@
+<!-- 登录界面 -->
+<div id="loginOverlay" style="position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);display:flex;justify-content:center;align-items:center;z-index:1000;flex-direction:column;color:white;font-family:'Microsoft YaHei',sans-serif;">
+    <div style="background:#2a2a3e;padding:40px;border-radius:20px;width:320px;text-align:center;box-shadow:0 0 40px rgba(100,100,255,0.3);">
+        <h1 style="color:#ffd700;">修仙秘境</h1>
+        <p style="color:#aaa;font-size:14px;">登录以保存你的修为</p>
+        <div style="margin:20px 0;text-align:left;">
+            <label>用户名</label>
+            <input id="loginUsername" type="text" placeholder="请输入用户名" style="width:100%;padding:8px;margin:5px 0 15px;border-radius:5px;border:none;background:#3a3a5e;color:white;">
+            <label>密码</label>
+            <input id="loginPassword" type="password" placeholder="请输入密码" style="width:100%;padding:8px;margin:5px 0 15px;border-radius:5px;border:none;background:#3a3a5e;color:white;">
+        </div>
+        <button id="loginBtn" style="background:#4a7aff;color:white;border:none;padding:10px 30px;border-radius:8px;cursor:pointer;font-size:16px;width:100%;">登录</button>
+        <p style="margin-top:10px;font-size:13px;color:#aaa;">还没有账号？ <span id="showRegister" style="color:#4a7aff;cursor:pointer;">注册</span></p>
+        <div id="loginMessage" style="margin-top:10px;color:#ff6b6b;font-size:14px;"></div>
+    </div>
+</div>
+
+<!-- 注册界面（初始隐藏） -->
+<div id="registerOverlay" style="position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);display:none;justify-content:center;align-items:center;z-index:1001;flex-direction:column;color:white;font-family:'Microsoft YaHei',sans-serif;">
+    <div style="background:#2a2a3e;padding:40px;border-radius:20px;width:320px;text-align:center;box-shadow:0 0 40px rgba(100,100,255,0.3);">
+        <h1 style="color:#ffd700;">注册</h1>
+        <div style="margin:20px 0;text-align:left;">
+            <label>用户名</label>
+            <input id="registerUsername" type="text" placeholder="请设置用户名" style="width:100%;padding:8px;margin:5px 0 15px;border-radius:5px;border:none;background:#3a3a5e;color:white;">
+            <label>密码</label>
+            <input id="registerPassword" type="password" placeholder="请设置密码" style="width:100%;padding:8px;margin:5px 0 15px;border-radius:5px;border:none;background:#3a3a5e;color:white;">
+        </div>
+        <button id="registerBtn" style="background:#6c5ce7;color:white;border:none;padding:10px 30px;border-radius:8px;cursor:pointer;font-size:16px;width:100%;">注册</button>
+        <p style="margin-top:10px;font-size:13px;color:#aaa;">已有账号？ <span id="showLogin" style="color:#4a7aff;cursor:pointer;">去登录</span></p>
+        <div id="registerMessage" style="margin-top:10px;color:#ff6b6b;font-size:14px;"></div>
+    </div>
+</div>
+
 <!DOCTYPE html>
 <html>
 <head>

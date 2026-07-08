@@ -1,6 +1,10 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
+const fs = require('fs').promises;
+const path = require('path');
+const bcrypt = require('bcrypt');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const server = http.createServer(app);
@@ -10,17 +14,15 @@ app.use(express.static('public'));
 
 console.log('✅ 修仙秘境服务器启动中...');
 
-// --- 游戏状态 ---
-const players = {};
-const monsters = {};
-const drops = {};
-
-// --- 配置 ---
+// --- 常量配置 ---
 const TICK_RATE = 30;
 const PLAYER_SPEED = 3;
 const MONSTER_BASE_SPEED = 1.2;
-const MONSTER_SPAWN_INTERVAL = 4000;  // 每4秒一只
-const DROP_LIFETIME = 15000;          // 掉落物15秒消失
+const MONSTER_SPAWN_INTERVAL = 4000;
+const DROP_LIFETIME = 15000;
+const HP_REGEN_RATE = 2;
+const HEAL_POTION_AMOUNT = 30;
+const DATA_FILE = path.join(__dirname, 'players.json');
 
 // --- 境界系统 ---
 const REALMS = [
@@ -31,10 +33,97 @@ const REALMS = [
     { name: '化神期', level: 5, maxCultivation: 5000, hpBonus: 200, attackBonus: 60 },
 ];
 
-// --- 工具函数：生成随机ID ---
-function genId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
+// --- 游戏状态（内存） ---
+const players = {};        // socket.id -> 玩家对象（游戏中使用）
+const monsters = {};
+const drops = {};
+const sessions = {};       // token -> username
+let playersData = {};      // username -> 永久数据（从文件加载）
 
-// --- 生成妖兽 ---
+// --- 工具函数 ---
+function genId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
+function getRealmIndex(realmName) { return REALMS.findIndex(r => r.name === realmName); }
+
+// --- 文件读写 ---
+async function loadPlayersData() {
+    try {
+        const data = await fs.readFile(DATA_FILE, 'utf8');
+        playersData = JSON.parse(data);
+    } catch (err) {
+        playersData = {};
+        await savePlayersData();
+    }
+}
+async function savePlayersData() {
+    await fs.writeFile(DATA_FILE, JSON.stringify(playersData, null, 2));
+}
+
+// --- 根据用户名创建玩家数据 ---
+function createPlayerData(username) {
+    const initialRealm = REALMS[0];
+    return {
+        username,
+        passwordHash: '', // 注册时设置
+        realm: initialRealm.name,
+        realmLevel: initialRealm.level,
+        cultivation: 0,
+        maxCultivation: initialRealm.maxCultivation,
+        hp: 100,
+        maxHp: 100,
+        attack: 10,
+        defense: 2,
+        artifacts: [],
+        inventory: [],
+    };
+}
+
+// --- 从持久数据构建游戏玩家对象 ---
+function buildGamePlayer(username, socketId) {
+    const data = playersData[username];
+    if (!data) return null;
+    return {
+        id: socketId,
+        username: username,
+        x: 200 + Math.random() * 200,
+        y: 200 + Math.random() * 200,
+        targetX: null,
+        targetY: null,
+        realm: data.realm,
+        realmLevel: data.realmLevel,
+        cultivation: data.cultivation,
+        maxCultivation: data.maxCultivation,
+        hp: data.hp,
+        maxHp: data.maxHp,
+        attack: data.attack,
+        defense: data.defense,
+        radius: 18,
+        speed: PLAYER_SPEED,
+        artifacts: data.artifacts || [],
+        inventory: data.inventory || [],
+        attackCooldown: 0,
+    };
+}
+
+// --- 保存玩家数据回文件（从游戏对象同步） ---
+function syncPlayerData(socketId) {
+    const p = players[socketId];
+    if (!p) return;
+    const username = p.username;
+    if (!playersData[username]) return;
+    const data = playersData[username];
+    data.realm = p.realm;
+    data.realmLevel = p.realmLevel;
+    data.cultivation = p.cultivation;
+    data.maxCultivation = p.maxCultivation;
+    data.hp = p.hp;
+    data.maxHp = p.maxHp;
+    data.attack = p.attack;
+    data.defense = p.defense;
+    data.artifacts = p.artifacts;
+    data.inventory = p.inventory;
+}
+
+// --- 妖兽生成 ---
 function spawnMonster() {
     const types = [
         { name: '青风狼', radius: 22, hp: 60, damage: 12, speed: 1.4, color: '#6f9e6f', exp: 30 },
@@ -43,8 +132,8 @@ function spawnMonster() {
     ];
     const type = types[Math.floor(Math.random() * types.length)];
     const id = genId();
-    const x = 50 + Math.random() * (800 - 100);
-    const y = 50 + Math.random() * (600 - 100);
+    const x = 50 + Math.random() * 700;
+    const y = 50 + Math.random() * 500;
     monsters[id] = {
         id,
         ...type,
@@ -53,15 +142,15 @@ function spawnMonster() {
         hp: type.hp,
         attackCooldown: 0,
     };
-    console.log(`🐺 妖兽 ${type.name} 出现在 (${x.toFixed(0)}, ${y.toFixed(0)})`);
 }
 
-// --- 生成掉落物 ---
+// --- 掉落物生成 ---
 function createDrop(x, y, monster) {
     const types = [
-        { name: '飞剑', damage: 15, radius: 8, color: '#aaccff', emoji: '🗡️' },
-        { name: '护盾', damage: 0, radius: 10, color: '#66dd88', emoji: '🛡️' },
-        { name: '灵符', damage: 25, radius: 6, color: '#ffaa66', emoji: '📜' },
+        { name: '飞剑', damage: 15, radius: 8, color: '#aaccff', emoji: '🗡️', hpRestore: 0 },
+        { name: '护盾', damage: 0, radius: 10, color: '#66dd88', emoji: '🛡️', hpRestore: 0 },
+        { name: '灵符', damage: 25, radius: 6, color: '#ffaa66', emoji: '📜', hpRestore: 0 },
+        { name: '回血丹', damage: 0, radius: 8, color: '#ff6b81', emoji: '💊', hpRestore: HEAL_POTION_AMOUNT },
     ];
     const type = types[Math.floor(Math.random() * types.length)];
     const id = genId();
@@ -72,77 +161,129 @@ function createDrop(x, y, monster) {
         spawnTime: Date.now(),
         monsterId: monster.id,
     };
-    console.log(`💎 掉落 ${type.name} 在 (${x.toFixed(0)}, ${y.toFixed(0)})`);
 }
 
 // --- 玩家突破 ---
 function breakthrough(player) {
-    const currentRealmIndex = REALMS.findIndex(r => r.name === player.realm);
-    if (currentRealmIndex >= REALMS.length - 1) return; // 已达最高境界
-    const nextRealm = REALMS[currentRealmIndex + 1];
-    player.realm = nextRealm.name;
-    player.realmLevel = nextRealm.level;
+    const currentIndex = getRealmIndex(player.realm);
+    if (currentIndex >= REALMS.length - 1) return;
+    const next = REALMS[currentIndex + 1];
+    player.realm = next.name;
+    player.realmLevel = next.level;
     player.cultivation = 0;
-    player.maxCultivation = nextRealm.maxCultivation;
-    player.maxHp += nextRealm.hpBonus;
+    player.maxCultivation = next.maxCultivation;
+    player.maxHp += next.hpBonus;
     player.hp = player.maxHp;
-    player.attack += nextRealm.attackBonus;
-    // 广播突破消息
-    io.emit('realmUp', { id: player.id, newRealm: player.realm, newMaxHp: player.maxHp, newAttack: player.attack });
-    console.log(`🌟 ${player.name} 突破至 ${player.realm}`);
+    player.attack += next.attackBonus;
+    io.emit('realmUp', { id: player.id, newRealm: player.realm });
+    console.log(`🌟 ${player.username} 突破至 ${player.realm}`);
 }
 
-// --- Socket.IO 事件 ---
+// --- Socket.IO ---
 io.on('connection', (socket) => {
-    console.log(`✨ 修仙者 [${socket.id}] 进入秘境`);
+    console.log(`🔗 新连接: ${socket.id}`);
 
-    // 初始化玩家
-    const initialRealm = REALMS[0];
-    players[socket.id] = {
-        id: socket.id,
-        x: 200 + Math.random() * 200,
-        y: 200 + Math.random() * 200,
-        name: `散修_${Math.floor(Math.random() * 10000)}`,
-        realm: initialRealm.name,
-        realmLevel: initialRealm.level,
-        cultivation: 0,
-        maxCultivation: initialRealm.maxCultivation,
-        hp: 100,
-        maxHp: 100,
-        attack: 10,
-        defense: 2,
-        radius: 18,
-        speed: PLAYER_SPEED,
-        targetX: null,
-        targetY: null,
-        artifacts: [],            // 已装备的法宝 { type, damage, angle, radius, cooldown }
-        inventory: [],            // 背包中的法宝（备用）
-        attackCooldown: 0,
-    };
-
-    // 发送当前状态
-    socket.emit('currentPlayers', players);
-    socket.emit('currentMonsters', monsters);
-    socket.emit('currentDrops', drops);
-
-    // 广播新玩家
-    socket.broadcast.emit('playerJoined', players[socket.id]);
-
-    // --- 事件监听 ---
-    socket.on('playerMove', (data) => {
-        const p = players[socket.id];
-        if (p) { p.targetX = data.x; p.targetY = data.y; }
+    // ---- 注册事件 ----
+    socket.on('register', async (data) => {
+        const { username, password } = data;
+        if (!username || !password) {
+            socket.emit('registerResult', { success: false, message: '用户名和密码不能为空' });
+            return;
+        }
+        if (playersData[username]) {
+            socket.emit('registerResult', { success: false, message: '用户名已存在' });
+            return;
+        }
+        // 创建账户
+        const hashed = await bcrypt.hash(password, 10);
+        const newData = createPlayerData(username);
+        newData.passwordHash = hashed;
+        playersData[username] = newData;
+        await savePlayersData();
+        socket.emit('registerResult', { success: true, message: '注册成功，请登录' });
+        console.log(`📝 新用户注册: ${username}`);
     });
 
-    // 玩家攻击（点击鼠标或空格触发）
-    socket.on('playerAttack', (data) => {
-        const p = players[socket.id];
-        if (!p) return;
-        // 检查冷却（每秒攻击一次）
-        if (p.attackCooldown > 0) return;
-        p.attackCooldown = 1; // 1秒冷却（在游戏循环中递减）
+    // ---- 登录事件 ----
+    socket.on('login', async (data) => {
+        const { username, password } = data;
+        if (!username || !password) {
+            socket.emit('loginResult', { success: false, message: '用户名和密码不能为空' });
+            return;
+        }
+        const userData = playersData[username];
+        if (!userData) {
+            socket.emit('loginResult', { success: false, message: '用户名不存在' });
+            return;
+        }
+        const match = await bcrypt.compare(password, userData.passwordHash);
+        if (!match) {
+            socket.emit('loginResult', { success: false, message: '密码错误' });
+            return;
+        }
+        // 生成 token
+        const token = uuidv4();
+        sessions[token] = username;
+        socket.emit('loginResult', { success: true, token, username });
+        console.log(`✅ 用户 ${username} 登录，token: ${token}`);
+    });
 
-        // 寻找攻击目标：最近且距离<100的妖兽
+    // ---- 使用 token 进入游戏 ----
+    socket.on('enterGame', (data) => {
+        const { token } = data;
+        if (!token || !sessions[token]) {
+            socket.emit('enterGameResult', { success: false, message: '无效的会话，请重新登录' });
+            return;
+        }
+        const username = sessions[token];
+        // 检查该用户是否已有在线连接（踢掉旧的）
+        for (const sid in players) {
+            if (players[sid].username === username) {
+                // 通知旧连接被踢出
+                io.to(sid).emit('kicked', { message: '你的账号在另一设备登录' });
+                // 保存旧玩家数据
+                syncPlayerData(sid);
+                // 删除旧玩家
+                delete players[sid];
+                io.emit('playerLeft', sid);
+                // 断开旧 socket
+                io.sockets.sockets.get(sid)?.disconnect(true);
+                break;
+            }
+        }
+        // 构建游戏玩家对象
+        const player = buildGamePlayer(username, socket.id);
+        if (!player) {
+            socket.emit('enterGameResult', { success: false, message: '加载数据失败' });
+            return;
+        }
+        // 将玩家加入游戏世界
+        players[socket.id] = player;
+        // 发送当前游戏状态给该玩家
+        socket.emit('currentPlayers', players);
+        socket.emit('currentMonsters', monsters);
+        socket.emit('currentDrops', drops);
+        // 广播新玩家
+        socket.broadcast.emit('playerJoined', player);
+        socket.emit('enterGameResult', { success: true });
+        console.log(`🎮 ${username} 进入游戏`);
+    });
+
+    // ---- 移动事件 ----
+    socket.on('playerMove', (data) => {
+        const p = players[socket.id];
+        if (p) {
+            p.targetX = data.x;
+            p.targetY = data.y;
+        }
+    });
+
+    // ---- 攻击事件 ----
+    socket.on('playerAttack', () => {
+        const p = players[socket.id];
+        if (!p || p.attackCooldown > 0) return;
+        p.attackCooldown = 1;
+        // 寻找最近的妖兽
         let target = null;
         let minDist = Infinity;
         for (const mid in monsters) {
@@ -154,44 +295,39 @@ io.on('connection', (socket) => {
             }
         }
         if (target) {
-            // 造成伤害
             const damage = p.attack + Math.floor(Math.random() * 5);
             target.hp -= damage;
-            // 如果妖兽死亡
             if (target.hp <= 0) {
-                // 增加修为
+                // 妖兽死亡
                 p.cultivation += target.exp || 30;
-                // 检查突破
-                if (p.cultivation >= p.maxCultivation) {
-                    breakthrough(p);
-                }
-                // 掉落法宝（概率40%）
-                if (Math.random() < 0.4) {
-                    createDrop(target.x, target.y, target);
-                }
-                // 删除妖兽
+                if (p.cultivation >= p.maxCultivation) breakthrough(p);
+                if (Math.random() < 0.4) createDrop(target.x, target.y, target);
                 delete monsters[mid];
                 io.emit('monsterKilled', { id: mid, killerId: p.id });
-                // 广播更新
-                io.emit('gameState', { players, monsters, drops });
             }
         }
     });
 
-    // 拾取掉落物（当玩家靠近时自动拾取，在游戏循环中处理）
-    // 玩家断开
+    // ---- 断开连接 ----
     socket.on('disconnect', () => {
-        console.log(`💨 修仙者 [${socket.id}] 离开秘境`);
-        delete players[socket.id];
-        io.emit('playerLeft', socket.id);
+        if (players[socket.id]) {
+            const p = players[socket.id];
+            console.log(`💨 ${p.username} 离开游戏`);
+            // 保存数据
+            syncPlayerData(socket.id);
+            delete players[socket.id];
+            io.emit('playerLeft', socket.id);
+        }
+        // 清除 session（但保留 token 关联，可让用户重新进入）
+        // 注意：这里不删除 sessions[token]，允许用户通过 token 重新进入
     });
 });
 
 // --- 游戏主循环 ---
-setInterval(() => {
+setInterval(async () => {
     const now = Date.now();
 
-    // 1. 玩家移动（平滑跟随目标）
+    // 1. 玩家移动 + 自动回血
     for (const id in players) {
         const p = players[id];
         if (p.targetX !== null && p.targetY !== null) {
@@ -204,7 +340,10 @@ setInterval(() => {
                 p.y += (dy / dist) * step;
             }
         }
-        // 攻击冷却递减
+        // 回血
+        if (p.hp < p.maxHp) {
+            p.hp = Math.min(p.maxHp, p.hp + HP_REGEN_RATE / TICK_RATE);
+        }
         if (p.attackCooldown > 0) p.attackCooldown -= 1 / TICK_RATE;
         if (p.attackCooldown < 0) p.attackCooldown = 0;
     }
@@ -212,7 +351,6 @@ setInterval(() => {
     // 2. 妖兽AI
     for (const mid in monsters) {
         const m = monsters[mid];
-        // 追击最近玩家
         let nearest = null;
         let minDist = Infinity;
         for (const pid in players) {
@@ -229,89 +367,85 @@ setInterval(() => {
                 m.x += (dx / dist) * step;
                 m.y += (dy / dist) * step;
             }
-            // 攻击玩家
             if (dist < m.radius + nearest.radius) {
-                if (m.attackCooldown === undefined) m.attackCooldown = 0;
+                if (!m.attackCooldown) m.attackCooldown = 0;
                 if (m.attackCooldown <= 0) {
                     nearest.hp -= m.damage * 0.5;
-                    m.attackCooldown = 1; // 每秒攻击一次
+                    m.attackCooldown = 1;
                     if (nearest.hp <= 0) {
-                        // 玩家死亡：重置
+                        // 玩家死亡：重置位置和血量，保留其他数据
                         nearest.hp = nearest.maxHp;
                         nearest.x = 200 + Math.random() * 200;
                         nearest.y = 200 + Math.random() * 200;
                         nearest.targetX = nearest.x;
                         nearest.targetY = nearest.y;
                         io.emit('playerDied', { id: nearest.id });
+                        // 保存数据
+                        syncPlayerData(nearest.id);
                     }
                 }
             }
         }
-        // 妖兽攻击冷却递减
         if (m.attackCooldown !== undefined && m.attackCooldown > 0) m.attackCooldown -= 1 / TICK_RATE;
         if (m.attackCooldown !== undefined && m.attackCooldown < 0) m.attackCooldown = 0;
     }
 
-    // 3. 玩家自动拾取掉落物
+    // 3. 拾取掉落物
     for (const pid in players) {
         const p = players[pid];
         for (const did in drops) {
             const d = drops[did];
             const dist = Math.hypot(p.x - d.x, p.y - d.y);
             if (dist < p.radius + d.radius) {
-                // 拾取：加入玩家法宝（最多装备6个）
-                if (p.artifacts.length < 6) {
-                    p.artifacts.push({
-                        type: d.name,
-                        damage: d.damage || 10,
-                        angle: Math.random() * Math.PI * 2,
-                        radius: 40 + Math.random() * 20,
-                        cooldown: 0,
-                    });
+                if (d.hpRestore > 0) {
+                    p.hp = Math.min(p.maxHp, p.hp + d.hpRestore);
+                    console.log(`💚 ${p.username} 拾取了回血丹`);
                 } else {
-                    // 背包（简单丢弃）
-                    p.inventory.push({ type: d.name, damage: d.damage || 10 });
+                    if (p.artifacts.length < 6) {
+                        p.artifacts.push({
+                            type: d.name,
+                            damage: d.damage || 10,
+                            angle: Math.random() * Math.PI * 2,
+                            radius: 40 + Math.random() * 20,
+                            cooldown: 0,
+                        });
+                    } else {
+                        p.inventory.push({ type: d.name, damage: d.damage || 10 });
+                    }
+                    console.log(`📦 ${p.username} 拾取了 ${d.name}`);
                 }
                 delete drops[did];
-                console.log(`📦 ${p.name} 拾取了 ${d.name}`);
             }
         }
     }
 
-    // 4. 法宝自动攻击（每个法宝每2秒攻击一次）
+    // 4. 法宝自动攻击
     for (const pid in players) {
         const p = players[pid];
-        p.artifacts.forEach((art, index) => {
-            // 更新角度（旋转）
+        p.artifacts.forEach(art => {
             art.angle += 0.03;
-            // 计算法宝在世界中的位置
             const wx = p.x + Math.cos(art.angle) * art.radius;
             const wy = p.y + Math.sin(art.angle) * art.radius;
-            // 攻击冷却
             if (art.cooldown === undefined) art.cooldown = 0;
             if (art.cooldown > 0) {
                 art.cooldown -= 1 / TICK_RATE;
                 return;
             }
-            // 检测附近妖兽
             for (const mid in monsters) {
                 const m = monsters[mid];
                 const dist = Math.hypot(wx - m.x, wy - m.y);
                 if (dist < art.radius + m.radius) {
-                    // 攻击！
                     const damage = art.damage || 10;
                     m.hp -= damage;
-                    art.cooldown = 2; // 冷却2秒
+                    art.cooldown = 2;
                     if (m.hp <= 0) {
-                        // 妖兽死亡
-                        const exp = m.exp || 30;
-                        p.cultivation += exp;
+                        p.cultivation += m.exp || 30;
                         if (p.cultivation >= p.maxCultivation) breakthrough(p);
                         if (Math.random() < 0.4) createDrop(m.x, m.y, m);
                         delete monsters[mid];
                         io.emit('monsterKilled', { id: mid, killerId: pid });
                     }
-                    break; // 每帧只攻击一只妖兽
+                    break;
                 }
             }
         });
@@ -324,17 +458,37 @@ setInterval(() => {
         }
     }
 
-    // 6. 广播完整状态
+    // 6. 广播状态
     io.emit('gameState', { players, monsters, drops });
 
+    // 7. 定期保存所有玩家数据（每30秒）
+    if (Math.floor(now / 30000) > Math.floor((now - 1000) / 30000)) {
+        for (const id in players) {
+            syncPlayerData(id);
+        }
+        await savePlayersData();
+        console.log('💾 玩家数据已自动保存');
+    }
 }, 1000 / TICK_RATE);
 
-// --- 定时生成妖兽（开局先刷3只） ---
+// --- 定时生成妖兽 ---
 setInterval(spawnMonster, MONSTER_SPAWN_INTERVAL);
 for (let i = 0; i < 3; i++) setTimeout(spawnMonster, i * 1000);
 
 // --- 启动服务器 ---
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 修仙秘境开启，访问 http://localhost:${PORT}`);
+(async () => {
+    await loadPlayersData();
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, () => {
+        console.log(`🚀 修仙秘境开启，访问 http://localhost:${PORT}`);
+        console.log(`📂 已加载 ${Object.keys(playersData).length} 个账户`);
+    });
+})();
+
+// --- 优雅退出 ---
+process.on('SIGINT', async () => {
+    console.log('🛑 正在保存数据并退出...');
+    for (const id in players) syncPlayerData(id);
+    await savePlayersData();
+    process.exit();
 });
