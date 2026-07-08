@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>修仙 · 秘境争锋</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        body { overflow: hidden; background: #1a1a2e; }
+        canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #e0e0e0;
+            font-family: 'Microsoft YaHei', sans-serif;
+            text-shadow: 0 0 10px rgba(0,0,0,0.8);
+            user-select: none;
+            pointer-events: none;
+        }
+        #ui .name { font-size: 18px; color: #ffd700; }
+        #ui .realm { font-size: 14px; color: #7ec8e3; }
+        #ui .hp-bar {
+            width: 150px;
+            height: 6px;
+            background: #333;
+            border-radius: 3px;
+            margin-top: 5px;
+        }
+        #ui .hp-fill {
+            height: 100%;
+            width: 100%;
+            background: #e74c3c;
+            border-radius: 3px;
+            transition: width 0.2s;
+        }
+        #info {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.5);
+            font-size: 14px;
+            font-family: 'Microsoft YaHei', sans-serif;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div class="name" id="playerName">---</div>
+        <div class="realm" id="playerRealm">境界：---</div>
+        <div class="hp-bar"><div class="hp-fill" id="playerHp"></div></div>
+    </div>
+    <div id="info">🖱️ 移动鼠标控制修仙者 · 更多玩法开发中...</div>
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- 引入 socket.io 客户端库 -->
+    <script src="/socket.io/socket.io.js"></script>
+    <!-- 引入游戏客户端逻辑 -->
+    <script type="module" src="/client.js"></script>
+</body>
+</html>
