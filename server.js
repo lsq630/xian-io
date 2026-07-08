@@ -132,8 +132,8 @@ function spawnMonster() {
     ];
     const type = types[Math.floor(Math.random() * types.length)];
     const id = genId();
-    const x = 50 + Math.random() * 700;
-    const y = 50 + Math.random() * 500;
+    const x = -800 + Math.random() * 1600; // -800 ~ 800
+    const y = -800 + Math.random() * 1600;
     monsters[id] = {
         id,
         ...type,
@@ -280,6 +280,7 @@ io.on('connection', (socket) => {
 
     // ---- 攻击事件 ----
     socket.on('playerAttack', () => {
+        console.log('⚔️ 收到攻击请求');
         const p = players[socket.id];
         if (!p || p.attackCooldown > 0) return;
         p.attackCooldown = 1;
@@ -297,6 +298,7 @@ io.on('connection', (socket) => {
         if (target) {
             const damage = p.attack + Math.floor(Math.random() * 5);
             target.hp -= damage;
+            console.log(`💥 对 ${target.name} 造成 ${damage} 伤害，剩余 ${target.hp} HP`);
             if (target.hp <= 0) {
                 // 妖兽死亡
                 p.cultivation += target.exp || 30;

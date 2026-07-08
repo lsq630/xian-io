@@ -14,6 +14,7 @@ const loginBtn = document.getElementById('loginBtn');
 const loginMessage = document.getElementById('loginMessage');
 const registerUsername = document.getElementById('registerUsername');
 const registerPassword = document.getElementById('registerPassword');
+const registerPasswordConfirm = document.getElementById('registerPasswordConfirm')
 const registerBtn = document.getElementById('registerBtn');
 const registerMessage = document.getElementById('registerMessage');
 const showRegister = document.getElementById('showRegister');
@@ -119,6 +120,8 @@ function setupSocketEvents() {
     });
 
     socket.on('gameState', (state) => {
+        console.log('📡 收到游戏状态，妖兽数量:', Object.keys(state.monsters).length);
+        monsters = state.monsters || {};
         for (const id in state.players) {
             if (players[id]) {
                 players[id].x = state.players[id].x;
@@ -162,6 +165,15 @@ function draw() {
     // 背景
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const me = players[myId];
+    if (!me) {
+        return;
+    }
+    let offsetX = 0, offsetY = 0;
+    if (me) {
+        offsetX = canvas.width / 2 - me.x;
+        offsetY = canvas.height / 2 - me.y;
+    }
     // 灵纹点缀
     for (let i = 0; i < 30; i++) {
         ctx.beginPath();
@@ -170,24 +182,28 @@ function draw() {
         ctx.fill();
     }
 
-    // --- 绘制掉落物 ---
+    // --- 绘制掉落物（坐标加偏移） ---
     for (const id in drops) {
         const d = drops[id];
+        const drawX = d.x + offsetX;
+        const drawY = d.y + offsetY;
         ctx.font = '20px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(d.emoji || '💎', d.x, d.y);
+        ctx.fillText(d.emoji || '💎', drawX, drawY);
         ctx.fillStyle = '#fff';
         ctx.font = '10px sans-serif';
-        ctx.fillText(d.name, d.x, d.y + 22);
+        ctx.fillText(d.name, drawX, drawY + 22);
     }
 
-    // --- 绘制妖兽 ---
+    // --- 绘制妖兽（坐标加偏移） ---
     for (const id in monsters) {
         const m = monsters[id];
+        const drawX = m.x + offsetX;
+        const drawY = m.y + offsetY;
         // 身体
         ctx.beginPath();
-        ctx.arc(m.x, m.y, m.radius, 0, Math.PI * 2);
+        ctx.arc(drawX, drawY, m.radius, 0, Math.PI * 2);
         ctx.fillStyle = m.color || '#e74c3c';
         ctx.fill();
         ctx.strokeStyle = '#222';
@@ -196,37 +212,40 @@ function draw() {
         // 眼睛
         ctx.fillStyle = '#fff';
         ctx.beginPath();
-        ctx.arc(m.x - 8, m.y - 6, 4, 0, Math.PI * 2);
+        ctx.arc(drawX - 8, drawY - 6, 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(m.x + 8, m.y - 6, 4, 0, Math.PI * 2);
+        ctx.arc(drawX + 8, drawY - 6, 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.fillStyle = '#000';
         ctx.beginPath();
-        ctx.arc(m.x - 9, m.y - 8, 2, 0, Math.PI * 2);
+        ctx.arc(drawX - 9, drawY - 8, 2, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(m.x + 7, m.y - 8, 2, 0, Math.PI * 2);
+        ctx.arc(drawX + 7, drawY - 8, 2, 0, Math.PI * 2);
         ctx.fill();
         // 名字和血条
         ctx.fillStyle = '#fff';
         ctx.font = '12px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(m.name, m.x, m.y - m.radius - 10);
+        ctx.fillText(m.name, drawX, drawY - m.radius - 10);
         const hpPercent = m.hp / m.maxHp;
         ctx.fillStyle = '#333';
-        ctx.fillRect(m.x - 25, m.y - m.radius - 18, 50, 5);
+        ctx.fillRect(drawX - 25, drawY - m.radius - 18, 50, 5);
         ctx.fillStyle = hpPercent > 0.5 ? '#2ecc71' : '#e74c3c';
-        ctx.fillRect(m.x - 25, m.y - m.radius - 18, 50 * hpPercent, 5);
+        ctx.fillRect(drawX - 25, drawY - m.radius - 18, 50 * hpPercent, 5);
     }
 
     // --- 绘制玩家 ---
     for (const id in players) {
         const p = players[id];
         const isMe = (id === myId);
+        const drawX = p.x + offsetX;
+        const drawY = p.y + offsetY;
+
         // 身体
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.arc(drawX, drawY, p.radius, 0, Math.PI * 2);
         const grad = ctx.createRadialGradient(p.x-5, p.y-5, 0, p.x, p.y, p.radius);
         grad.addColorStop(0, isMe ? '#f5e6d3' : '#d4c5a9');
         grad.addColorStop(1, isMe ? '#c4a882' : '#a88b6e');
@@ -240,31 +259,31 @@ function draw() {
         ctx.arc(p.x, p.y + p.radius * 0.3, p.radius * 0.85, 0, Math.PI);
         ctx.fillStyle = isMe ? 'rgba(60, 130, 210, 0.7)' : 'rgba(100, 100, 120, 0.5)';
         ctx.fill();
-        // 名字 & 境界
+        // 名字和境界
         ctx.fillStyle = isMe ? '#ffd700' : '#c8c8c8';
         ctx.font = `${isMe ? 'bold ' : ''}14px "Microsoft YaHei", sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText(p.username || p.name || '无名', p.x, p.y - p.radius - 12);
+        ctx.fillText(p.username || p.name || '无名', drawX, drawY - p.radius - 12);
         ctx.fillStyle = '#7ec8e3';
         ctx.font = '11px sans-serif';
-        ctx.fillText(p.realm || '凡人', p.x, p.y - p.radius - 28);
+        ctx.fillText(p.realm || '凡人', drawX, drawY - p.radius - 28);
 
-        // 绘制法宝（围绕玩家）
+        // 法宝
         if (p.artifacts && p.artifacts.length > 0) {
             p.artifacts.forEach(art => {
-                const wx = p.x + Math.cos(art.angle) * art.radius;
-                const wy = p.y + Math.sin(art.angle) * art.radius;
+                const wx = p.x + Math.cos(art.angle) * art.radius + offsetX;
+                const wy = p.y + Math.sin(art.angle) * art.radius + offsetY;
                 ctx.font = '16px sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillText('🗡️', wx, wy);
             });
-        }                                                                                                                                                                                                                           
+        }                                                                                                                                                                                                                      
 
-        // 自己的指示光环
+        // 自己的指示光环和血量条
         if (isMe) {
             ctx.beginPath();
-            ctx.arc(p.x, p.y, p.radius + 6, 0, Math.PI * 2);
+            ctx.arc(drawX, drawY, p.radius + 6, 0, Math.PI * 2);
             ctx.strokeStyle = 'rgba(255, 215, 0, 0.4)';
             ctx.lineWidth = 2;
             ctx.setLineDash([4, 6]);
@@ -273,15 +292,14 @@ function draw() {
             // 血量条
             const hpPercent = p.hp / p.maxHp;
             ctx.fillStyle = '#333';
-            ctx.fillRect(p.x - 30, p.y - p.radius - 34, 60, 6);
+            ctx.fillRect(drawX - 30, drawY - p.radius - 34, 60, 6);
             ctx.fillStyle = hpPercent > 0.5 ? '#2ecc71' : '#e74c3c';
-            ctx.fillRect(p.x - 30, p.y - p.radius - 34, 60 * hpPercent, 6);
+            ctx.fillRect(drawX - 30, drawY - p.radius - 34, 60 * hpPercent, 6);
         }
     }
 
     requestAnimationFrame(draw);
 }
-draw();
 
 window.addEventListener('beforeunload', () => {
     if (socket) socket.disconnect();
@@ -318,8 +336,13 @@ function init() {
     registerBtn.onclick = () => {
         const uname = registerUsername.value.trim();
         const pwd = registerPassword.value.trim();
-        if (!uname || !pwd) {
+        const pwdConfirm = registerPasswordConfirm.value.trim();
+        if (!uname || !pwd || !pwdConfirm) {
             showMessage(registerMessage, '请填写完整信息');
+            return;
+        }
+        if (pwd !== pwdConfirm) {
+            showMessage(registerMessage, '两次输入的密码不一致');
             return;
         }
         register(uname, pwd);
@@ -339,6 +362,9 @@ function init() {
         if (e.key === 'Enter') loginBtn.click();
     });
     registerPassword.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') registerBtn.click();
+    });
+    registerPasswordConfirm.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') registerBtn.click();
     });
 
