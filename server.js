@@ -1,3 +1,21 @@
+const mongoose = require('mongoose');
+
+const playerSchema = new mongoose.Schema({
+    username: { type: String, unique: true },
+    passwordHash: String,
+    realm: String,
+    realmLevel: Number,
+    cultivation: Number,
+    maxCultivation: Number,
+    hp: Number,
+    maxHp: Number,
+    attack: Number,
+    defense: Number,
+    artifacts: Array,
+    inventory: Array,
+});
+const Player = mongoose.model('Player', playerSchema);
+
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -9,6 +27,9 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
+
+// await mongoose.connect(process.env.MONGO_URI);
+// console.log('✅ 已连接 MongoDB');
 
 app.use(express.static('public'));
 
@@ -44,18 +65,36 @@ let playersData = {};      // username -> 永久数据（从文件加载）
 function genId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
 function getRealmIndex(realmName) { return REALMS.findIndex(r => r.name === realmName); }
 
-// --- 文件读写 ---
+// 从 MongoDB 加载所有玩家数据到内存缓存
 async function loadPlayersData() {
-    try {
-        const data = await fs.readFile(DATA_FILE, 'utf8');
-        playersData = JSON.parse(data);
-    } catch (err) {
-        playersData = {};
-        await savePlayersData();
-    }
+    const docs = await Player.find({});
+    playersData = {};
+    docs.forEach(doc => {
+        playersData[doc.username] = doc.toObject();
+    });
+    console.log(`📂 已加载 ${Object.keys(playersData).length} 个账户`);
 }
-async function savePlayersData() {
-    await fs.writeFile(DATA_FILE, JSON.stringify(playersData, null, 2));
+
+// 将内存中的单个玩家数据同步到 MongoDB
+async function syncPlayerData(socketId) {
+    const p = players[socketId];
+    if (!p || !p.username) return;
+    await Player.findOneAndUpdate(
+        { username: p.username },
+        {
+            realm: p.realm,
+            realmLevel: p.realmLevel,
+            cultivation: p.cultivation,
+            maxCultivation: p.maxCultivation,
+            hp: p.hp,
+            maxHp: p.maxHp,
+            attack: p.attack,
+            defense: p.defense,
+            artifacts: p.artifacts,
+            inventory: p.inventory,
+        },
+        { upsert: true } // 如果不存在则创建
+    );
 }
 
 // --- 根据用户名创建玩家数据 ---
@@ -104,25 +143,6 @@ function buildGamePlayer(username, socketId) {
     };
 }
 
-// --- 保存玩家数据回文件（从游戏对象同步） ---
-function syncPlayerData(socketId) {
-    const p = players[socketId];
-    if (!p) return;
-    const username = p.username;
-    if (!playersData[username]) return;
-    const data = playersData[username];
-    data.realm = p.realm;
-    data.realmLevel = p.realmLevel;
-    data.cultivation = p.cultivation;
-    data.maxCultivation = p.maxCultivation;
-    data.hp = p.hp;
-    data.maxHp = p.maxHp;
-    data.attack = p.attack;
-    data.defense = p.defense;
-    data.artifacts = p.artifacts;
-    data.inventory = p.inventory;
-}
-
 // --- 妖兽生成 ---
 function spawnMonster() {
     const types = [
@@ -164,7 +184,7 @@ function createDrop(x, y, monster) {
 }
 
 // --- 玩家突破 ---
-function breakthrough(player) {
+async function breakthrough(player) {
     const currentIndex = getRealmIndex(player.realm);
     if (currentIndex >= REALMS.length - 1) return;
     const next = REALMS[currentIndex + 1];
@@ -177,6 +197,7 @@ function breakthrough(player) {
     player.attack += next.attackBonus;
     io.emit('realmUp', { id: player.id, newRealm: player.realm });
     console.log(`🌟 ${player.username} 突破至 ${player.realm}`);
+    await syncPlayerData(player.id);
 }
 
 // --- Socket.IO ---
@@ -194,12 +215,31 @@ io.on('connection', (socket) => {
             socket.emit('registerResult', { success: false, message: '用户名已存在' });
             return;
         }
-        // 创建账户
+        // 检查用户名是否已存在（从 MongoDB 查询）
+        const existing = await Player.findOne({ username });
+        if (existing) {
+            socket.emit('registerResult', { success: false, message: '用户名已存在' });
+            return;
+        }
+
         const hashed = await bcrypt.hash(password, 10);
-        const newData = createPlayerData(username);
-        newData.passwordHash = hashed;
-        playersData[username] = newData;
-        await savePlayersData();
+        const newPlayer = new Player({
+            username,
+            passwordHash: hashed,
+            realm: '炼气期',
+            realmLevel: 1,
+            cultivation: 0,
+            maxCultivation: 100,
+           hp: 100,
+           maxHp: 100,
+           attack: 10,
+           defense: 2,
+            artifacts: [],
+            inventory: [],
+        });
+        await newPlayer.save();
+        // 同步到内存缓存
+        playersData[username] = newPlayer.toObject();
         socket.emit('registerResult', { success: true, message: '注册成功，请登录' });
         console.log(`📝 新用户注册: ${username}`);
     });
@@ -302,7 +342,9 @@ io.on('connection', (socket) => {
             if (target.hp <= 0) {
                 // 妖兽死亡
                 p.cultivation += target.exp || 30;
-                if (p.cultivation >= p.maxCultivation) breakthrough(p);
+                if (p.cultivation >= p.maxCultivation) {
+                    await breakthrough(p);
+                }
                 if (Math.random() < 0.4) createDrop(target.x, target.y, target);
                 delete monsters[mid];
                 io.emit('monsterKilled', { id: mid, killerId: p.id });
@@ -442,7 +484,9 @@ setInterval(async () => {
                     art.cooldown = 2;
                     if (m.hp <= 0) {
                         p.cultivation += m.exp || 30;
-                        if (p.cultivation >= p.maxCultivation) breakthrough(p);
+                        if (p.cultivation >= p.maxCultivation) {
+                            await breakthrough(p);
+                        }
                         if (Math.random() < 0.4) createDrop(m.x, m.y, m);
                         delete monsters[mid];
                         io.emit('monsterKilled', { id: mid, killerId: pid });
@@ -463,13 +507,12 @@ setInterval(async () => {
     // 6. 广播状态
     io.emit('gameState', { players, monsters, drops });
 
-    // 7. 定期保存所有玩家数据（每30秒）
+    // 在游戏主循环的保存部分（约第 350 行附近）
     if (Math.floor(now / 30000) > Math.floor((now - 1000) / 30000)) {
         for (const id in players) {
-            syncPlayerData(id);
+            await syncPlayerData(id);
         }
-        await savePlayersData();
-        console.log('💾 玩家数据已自动保存');
+        console.log('💾 玩家数据已自动保存到 MongoDB');
     }
 }, 1000 / TICK_RATE);
 
@@ -479,18 +522,26 @@ for (let i = 0; i < 3; i++) setTimeout(spawnMonster, i * 1000);
 
 // --- 启动服务器 ---
 (async () => {
+    const mongoUri = process.env.MONGO_URI;
+    if (!mongoUri) {
+        console.error('❌ 环境变量 MONGO_URI 未设置');
+        process.exit(1);
+    }
+    await mongoose.connect(mongoUri);
+    console.log('✅ 已连接 MongoDB');
     await loadPlayersData();
     const PORT = process.env.PORT || 3000;
     server.listen(PORT, () => {
         console.log(`🚀 修仙秘境开启，访问 http://localhost:${PORT}`);
-        console.log(`📂 已加载 ${Object.keys(playersData).length} 个账户`);
     });
 })();
 
 // --- 优雅退出 ---
 process.on('SIGINT', async () => {
     console.log('🛑 正在保存数据并退出...');
-    for (const id in players) syncPlayerData(id);
-    await savePlayersData();
+    for (const id in players) {
+        await syncPlayerData(id);
+    }
+    await mongoose.disconnect();
     process.exit();
 });
