@@ -1,3 +1,4 @@
+require('dotenv').config();
 const mongoose = require('mongoose');
 
 const playerSchema = new mongoose.Schema({
@@ -47,7 +48,7 @@ const DATA_FILE = path.join(__dirname, 'players.json');
 
 // --- 境界系统 ---
 const REALMS = [
-    { name: '炼气期', level: 1, maxCultivation: 100, hpBonus: 0, attackBonus: 0 },
+    { name: '炼气期', level: 1, maxCultivation: 100, hpBonus: 0, attackBonus: 10 },
     { name: '筑基期', level: 2, maxCultivation: 300, hpBonus: 20, attackBonus: 5 },
     { name: '金丹期', level: 3, maxCultivation: 800, hpBonus: 50, attackBonus: 15 },
     { name: '元婴期', level: 4, maxCultivation: 2000, hpBonus: 100, attackBonus: 30 },
@@ -319,7 +320,7 @@ io.on('connection', (socket) => {
     });
 
     // ---- 攻击事件 ----
-    socket.on('playerAttack', () => {
+    socket.on('playerAttack', async () => {
         console.log('⚔️ 收到攻击请求');
         const p = players[socket.id];
         if (!p || p.attackCooldown > 0) return;
@@ -353,7 +354,7 @@ io.on('connection', (socket) => {
     });
 
     // ---- 断开连接 ----
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
         if (players[socket.id]) {
             const p = players[socket.id];
             console.log(`💨 ${p.username} 离开游戏`);
@@ -466,7 +467,7 @@ setInterval(async () => {
     // 4. 法宝自动攻击
     for (const pid in players) {
         const p = players[pid];
-        p.artifacts.forEach(art => {
+        p.artifacts.forEach(async (art) => {
             art.angle += 0.03;
             const wx = p.x + Math.cos(art.angle) * art.radius;
             const wy = p.y + Math.sin(art.angle) * art.radius;
